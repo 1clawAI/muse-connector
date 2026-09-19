@@ -1,0 +1,28 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Discovery documents are served
+        run: |
+          MUSE_CONNECTOR_SECRET=$(head -c 48 /dev/urandom | base64) \
+          ONECLAW_PLATFORM_API_KEY=plt_ci ONECLAW_PLATFORM_APP_ID=00000000-0000-4000-8000-000000000000 \
+          node dist/index.js & sleep 2
+          curl -fsS localhost:8787/healthz
+          curl -fsS localhost:8787/openapi.json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const d=JSON.parse(s);if(!d.paths["/v1/approvals/{id}/decide"])process.exit(1)})'
+          curl -fsS localhost:8787/llms.txt | grep -q mcn_
