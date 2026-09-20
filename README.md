@@ -56,7 +56,15 @@ changing agents or policies. Those stay in the 1Claw dashboard.
 - **Decisions bind to what was shown.** A consensus vote must echo the pending approval's
   `payload_hash`; the connector reads it fresh and ignores any hash in the request body.
 - `/v1/link` accepts only browser origins on the 1Claw dashboard allowlist and only with a 1Claw
-  user session; it never mints a token for an email the caller merely claims.
+  user session (a connector token is refused there); it never mints a token for an email the caller
+  merely claims. The dashboard's `/api/connect/muse` route that fronts it is same-origin only.
+- **Ceilings in the service:** 120 requests/min per connector token, 60/min per client address on
+  `/v1/*` (bad tokens included, so the vault is never a token oracle), 10/min per address on
+  `/v1/link`, 16 KB request bodies. `Cache-Control: no-store`, `nosniff`, `X-Frame-Options: DENY`
+  on every response.
+- **Hostname:** `muse.1claw.co` is served through the 1Claw edge (Vercel) proxy to Cloud Run, the
+  same path as `mcp.1claw.co`; HSTS (`includeSubDomains; preload`) comes from the apex. The proxy
+  forwards neither the dashboard session cookie nor a cookie-derived bearer to this service.
 
 ## Running it
 

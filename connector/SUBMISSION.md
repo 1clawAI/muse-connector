@@ -44,7 +44,7 @@ connector token into Muse. Base URL `https://muse.1claw.co`; API description at
 | Data retention by the connector | None. The service is stateless; it holds no user data at rest. Logs contain connection ids and route names, never token values. |
 | Transport | TLS only (Cloud Run managed certificates). HSTS on `muse.1claw.co`. |
 | Audit | Every decision is recorded in the user's 1Claw audit log (HMAC hash chain) with actor = the user, via platform app "Muse". |
-| Abuse controls | Per-connection scoping is enforced by the 1Claw vault, not by this service; rate limits at the vault edge apply. Decide rejects a second decision (409) and requires the approval to be pending. |
+| Abuse controls | Per-connection scoping is enforced by the 1Claw vault, not by this service. The connector itself rate-limits per connector token (120 req/min), per client address (60 req/min on `/v1/*`, 10/min on `/v1/link`), caps request bodies at 16 KB, and marks every API response `Cache-Control: no-store`; the vault's per-app limits apply behind it. Decide rejects a second decision (409) and requires the approval to be pending. |
 | Injection | The connector's instructions (`/llms.txt`) tell the assistant to read the approval back and get an explicit yes/no per item before deciding. The vault additionally screens transaction recipients against OFAC before any approval can be executed. |
 | Secrets in the service | One `plt_` platform key and one HMAC secret, both in Google Secret Manager, never in the image or logs. |
 | Source | Apache-2.0, https://github.com/1clawAI/muse-connector |

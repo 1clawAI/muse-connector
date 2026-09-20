@@ -19,6 +19,8 @@ import { mintToken, verifyToken, TOKEN_PREFIX } from "./tokens.js";
 import type { OneclawPort } from "./oneclaw.js";
 import { openapiDocument, llmsTxt } from "./openapi.js";
 import { normalizeApproval } from "./normalize.js";
+import { createRateLimiter, type RateLimiter } from "./ratelimit.js";
+import { bodyLimit } from "hono/body-limit";
 
 export interface AppConfig {
     /** HMAC secret for connector tokens (≥32 chars). */
@@ -29,15 +31,28 @@ export interface AppConfig {
     dashboardUrl: string;
     /** Origins allowed to call `/v1/link` from a browser. */
     linkOrigins: string[];
+    /** Per-token and per-IP request ceilings (per instance, per minute). Tests override. */
+    limits?: { perToken?: RateLimiter; perIp?: RateLimiter; link?: RateLimiter };
 }
 
 type Env = { Variables: { cid: string } };
 
-function problem(c: Context, status: 400 | 401 | 403 | 404 | 409 | 422 | 502, detail: string) {
+function problem(c: Context, status: 400 | 401 | 403 | 404 | 409 | 413 | 422 | 429 | 502, detail: string) {
     return c.json({ type: "about:blank", title: statusTitle(status), status, detail }, status);
 }
 function statusTitle(s: number): string {
-    return { 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 409: "Conflict", 422: "Unprocessable", 502: "Bad Gateway" }[s] ?? "Error";
+    return { 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 409: "Conflict", 413: "Payload Too Large", 422: "Unprocessable", 429: "Too Many Requests", 502: "Bad Gateway" }[s] ?? "Error";
+}
+
+/**
+ * The caller's address. Cloud Run (and the 1Claw edge proxy in front of it)
+ * append the real client to `X-Forwarded-For`; the last hop we trust is the
+ * one immediately before us, so take the last entry, never the first.
+ */
+function clientIp(c: Context): string {
+    const xff = c.req.header("x-forwarded-for") ?? "";
+    const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
+    return parts[parts.length - 1] ?? c.req.header("x-real-ip") ?? "unknown";
 }
 
 /** Map a 1Claw error (status on the Error) to a connector response. */
@@ -54,6 +69,28 @@ function upstream(c: Context, e: unknown) {
 
 export function createApp(cfg: AppConfig, oneclaw: OneclawPort): Hono<Env> {
     const app = new Hono<Env>();
+    const limits = {
+        perToken: cfg.limits?.perToken ?? createRateLimiter(120),
+        perIp: cfg.limits?.perIp ?? createRateLimiter(60),
+        link: cfg.limits?.link ?? createRateLimiter(10),
+    };
+
+    // ── Baseline response hygiene ──────────────────────────────────
+    app.use("*", async (c, next) => {
+        await next();
+        c.header("X-Content-Type-Options", "nosniff");
+        c.header("Referrer-Policy", "no-referrer");
+        c.header("X-Frame-Options", "DENY");
+        if (c.req.path.startsWith("/v1/")) c.header("Cache-Control", "no-store");
+    });
+    // Nothing here legitimately needs a large body: a decision is two fields.
+    app.use("/v1/*", bodyLimit({ maxSize: 16 * 1024, onError: (c) => problem(c, 413, "request body too large") }));
+    // Per-IP ceiling on everything under /v1 (bad tokens included), so a
+    // scripted client cannot turn the vault into a token oracle.
+    app.use("/v1/*", async (c, next) => {
+        if (!limits.perIp.take(clientIp(c))) return problem(c, 429, "too many requests from this address; slow down");
+        return next();
+    });
 
     // ── Discovery (public) ─────────────────────────────────────────
     // `/healthz` is answered by Google's front end on *.run.app before the app sees it; serve both.
@@ -68,8 +105,10 @@ export function createApp(cfg: AppConfig, oneclaw: OneclawPort): Hono<Env> {
     app.post("/v1/link", async (c) => {
         const origin = c.req.header("origin");
         if (origin && !cfg.linkOrigins.includes(origin)) return problem(c, 403, "origin not allowed");
+        if (!limits.link.take(clientIp(c))) return problem(c, 429, "too many link attempts; try again in a minute");
         const jwt = bearer(c);
         if (!jwt) return problem(c, 401, "sign in to 1Claw first");
+        if (jwt.startsWith(TOKEN_PREFIX)) return problem(c, 401, "link takes a 1Claw user session, not a connector token");
         const body = await c.req.json().catch(() => ({}));
         const parsed = z.object({ return_to: z.string().url().optional() }).safeParse(body);
         if (!parsed.success) return problem(c, 400, "return_to must be a URL");
@@ -99,6 +138,7 @@ export function createApp(cfg: AppConfig, oneclaw: OneclawPort): Hono<Env> {
         if (!token) return problem(c, 401, `Authorization: Bearer ${TOKEN_PREFIX}… required`);
         const v = verifyToken(cfg.connectorSecret, token);
         if (!v.ok) return problem(c, 401, `invalid connector token (${v.reason})`);
+        if (!limits.perToken.take(v.payload.jti)) return problem(c, 429, "too many requests for this connector token; slow down");
         let conn;
         try {
             conn = await oneclaw.getConnection(v.payload.cid);

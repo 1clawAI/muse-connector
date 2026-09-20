@@ -69,7 +69,14 @@ export function createOneclawPort(cfg: OneclawConfig): OneclawPort {
         async whoami(userJwt) {
             const res = await fetch(`${cfg.baseUrl}/v1/auth/me`, { headers: { Authorization: `Bearer ${userJwt}` } });
             if (!res.ok) throw Object.assign(new Error("not signed in to 1Claw"), { status: 401 });
-            const me = (await res.json()) as { id: string; email: string; org_id: string };
+            const me = (await res.json()) as { id?: string; email?: string; org_id?: string; principal_type?: string; type?: string };
+            // Only a human session links: an agent or platform token that
+            // happens to answer /v1/auth/me must not be able to mint a
+            // connector token for whatever email it carries.
+            const kind = me.principal_type ?? me.type;
+            if ((kind && kind !== "user") || !me.id || !me.email || !me.org_id) {
+                throw Object.assign(new Error("link requires a signed-in 1Claw user"), { status: 401 });
+            }
             return { id: me.id, email: me.email, org_id: me.org_id };
         },
         async upsertUser(email, returnTo) {
