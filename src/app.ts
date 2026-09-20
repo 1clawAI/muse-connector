@@ -56,6 +56,8 @@ export function createApp(cfg: AppConfig, oneclaw: OneclawPort): Hono<Env> {
     const app = new Hono<Env>();
 
     // ── Discovery (public) ─────────────────────────────────────────
+    // `/healthz` is answered by Google's front end on *.run.app before the app sees it; serve both.
+    app.get("/health", (c) => c.json({ ok: true, service: "1claw-muse-connector" }));
     app.get("/healthz", (c) => c.json({ ok: true, service: "1claw-muse-connector" }));
     app.get("/openapi.json", (c) => c.json(openapiDocument(cfg.publicUrl)));
     app.get("/llms.txt", (c) => c.text(llmsTxt(cfg.publicUrl, cfg.dashboardUrl)));
