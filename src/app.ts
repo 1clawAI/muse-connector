@@ -21,6 +21,7 @@ import { openapiDocument, llmsTxt } from "./openapi.js";
 import { normalizeApproval } from "./normalize.js";
 import { createRateLimiter, type RateLimiter } from "./ratelimit.js";
 import { bodyLimit } from "hono/body-limit";
+import { timingSafeEqual } from "node:crypto";
 
 export interface AppConfig {
     /** HMAC secret for connector tokens (≥32 chars). */
@@ -33,6 +34,13 @@ export interface AppConfig {
     linkOrigins: string[];
     /** Per-token and per-IP request ceilings (per instance, per minute). Tests override. */
     limits?: { perToken?: RateLimiter; perIp?: RateLimiter; link?: RateLimiter };
+    /**
+     * Shared secret the 1Claw edge proxy sends as `x-oneclaw-proxy-secret`
+     * next to `x-oneclaw-client-ip`. When it matches, that header is the
+     * client address for rate limiting; otherwise the last X-Forwarded-For
+     * hop is (which behind the edge is the edge itself).
+     */
+    proxySecret?: string;
 }
 
 type Env = { Variables: { cid: string } };
@@ -49,7 +57,16 @@ function statusTitle(s: number): string {
  * append the real client to `X-Forwarded-For`; the last hop we trust is the
  * one immediately before us, so take the last entry, never the first.
  */
-function clientIp(c: Context): string {
+function clientIp(c: Context, proxySecret?: string): string {
+    if (proxySecret) {
+        const given = c.req.header("x-oneclaw-proxy-secret") ?? "";
+        const a = Buffer.from(given);
+        const b = Buffer.from(proxySecret);
+        if (a.length === b.length && timingSafeEqual(a, b)) {
+            const ip = c.req.header("x-oneclaw-client-ip")?.trim();
+            if (ip) return ip;
+        }
+    }
     const xff = c.req.header("x-forwarded-for") ?? "";
     const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
     return parts[parts.length - 1] ?? c.req.header("x-real-ip") ?? "unknown";
@@ -88,7 +105,7 @@ export function createApp(cfg: AppConfig, oneclaw: OneclawPort): Hono<Env> {
     // Per-IP ceiling on everything under /v1 (bad tokens included), so a
     // scripted client cannot turn the vault into a token oracle.
     app.use("/v1/*", async (c, next) => {
-        if (!limits.perIp.take(clientIp(c))) return problem(c, 429, "too many requests from this address; slow down");
+        if (!limits.perIp.take(clientIp(c, cfg.proxySecret))) return problem(c, 429, "too many requests from this address; slow down");
         return next();
     });
 
@@ -105,7 +122,7 @@ export function createApp(cfg: AppConfig, oneclaw: OneclawPort): Hono<Env> {
     app.post("/v1/link", async (c) => {
         const origin = c.req.header("origin");
         if (origin && !cfg.linkOrigins.includes(origin)) return problem(c, 403, "origin not allowed");
-        if (!limits.link.take(clientIp(c))) return problem(c, 429, "too many link attempts; try again in a minute");
+        if (!limits.link.take(clientIp(c, cfg.proxySecret))) return problem(c, 429, "too many link attempts; try again in a minute");
         const jwt = bearer(c);
         if (!jwt) return problem(c, 401, "sign in to 1Claw first");
         if (jwt.startsWith(TOKEN_PREFIX)) return problem(c, 401, "link takes a 1Claw user session, not a connector token");

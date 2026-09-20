@@ -22,6 +22,7 @@ const app = createApp(
         publicUrl,
         dashboardUrl,
         linkOrigins: (process.env.MUSE_CONNECTOR_LINK_ORIGINS ?? "https://1claw.co,https://www.1claw.co,https://1claw.xyz,https://www.1claw.xyz").split(",").map((s) => s.trim()),
+        proxySecret: process.env.ONECLAW_PROXY_SECRET || undefined,
     },
     createOneclawPort({
         baseUrl: (process.env.ONECLAW_BASE_URL ?? "https://api.1claw.co").replace(/\/$/, ""),

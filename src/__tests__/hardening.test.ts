@@ -61,6 +61,23 @@ describe("rate limits", () => {
     });
 });
 
+describe("client address behind the edge", () => {
+    it("trusts x-oneclaw-client-ip only with the proxy secret", async () => {
+        const app = createApp({ ...base, proxySecret: "p".repeat(32), limits: { perToken: createRateLimiter(1000), perIp: createRateLimiter(2), link: createRateLimiter(1000) } }, port());
+        const withSecret = (ip: string) => ({ Authorization: "Bearer mcn_x.y", "x-oneclaw-proxy-secret": "p".repeat(32), "x-oneclaw-client-ip": ip, "x-forwarded-for": "198.51.100.7" });
+        expect((await app.request("/v1/me", { headers: withSecret("203.0.113.1") })).status).toBe(401);
+        expect((await app.request("/v1/me", { headers: withSecret("203.0.113.1") })).status).toBe(401);
+        expect((await app.request("/v1/me", { headers: withSecret("203.0.113.1") })).status).toBe(429);
+        // Same edge hop, different real client: its own bucket.
+        expect((await app.request("/v1/me", { headers: withSecret("203.0.113.2") })).status).toBe(401);
+        // Wrong secret: the header is ignored and the last XFF hop is the key.
+        const spoof = { Authorization: "Bearer mcn_x.y", "x-oneclaw-proxy-secret": "wrong", "x-oneclaw-client-ip": "203.0.113.3", "x-forwarded-for": "198.51.100.7" };
+        expect((await app.request("/v1/me", { headers: spoof })).status).toBe(401);
+        expect((await app.request("/v1/me", { headers: spoof })).status).toBe(401);
+        expect((await app.request("/v1/me", { headers: spoof })).status).toBe(429);
+    });
+});
+
 describe("request hygiene", () => {
     it("refuses a connector token on /v1/link", async () => {
         const app = createApp(base, port());
