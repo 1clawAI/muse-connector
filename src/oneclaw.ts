@@ -35,6 +35,19 @@ export interface OneclawPort {
     resources(connectionId: string): Promise<Record<string, unknown>>;
 }
 
+/** A string claim from a JWT the vault has already verified for us. */
+function jwtClaim(jwt: string, name: string): string | undefined {
+    const parts = jwt.split(".");
+    if (parts.length !== 3) return undefined;
+    try {
+        const json = Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+        const v = (JSON.parse(json) as Record<string, unknown>)[name];
+        return typeof v === "string" && v.length > 0 ? v : undefined;
+    } catch {
+        return undefined;
+    }
+}
+
 export interface OneclawConfig {
     baseUrl: string;
     platformApiKey: string;
@@ -67,17 +80,19 @@ export function createOneclawPort(cfg: OneclawConfig): OneclawPort {
     const p = client.platform;
     return {
         async whoami(userJwt) {
+            // /v1/auth/me answers only for a human session (the vault refuses
+            // agent and platform principals with 403) and returns the user
+            // row, which carries no org field — the org is the `org` claim of
+            // the token the vault just verified.
             const res = await fetch(`${cfg.baseUrl}/v1/auth/me`, { headers: { Authorization: `Bearer ${userJwt}` } });
             if (!res.ok) throw Object.assign(new Error("not signed in to 1Claw"), { status: 401 });
             const me = (await res.json()) as { id?: string; email?: string; org_id?: string; principal_type?: string; type?: string };
-            // Only a human session links: an agent or platform token that
-            // happens to answer /v1/auth/me must not be able to mint a
-            // connector token for whatever email it carries.
             const kind = me.principal_type ?? me.type;
-            if ((kind && kind !== "user") || !me.id || !me.email || !me.org_id) {
+            const org_id = me.org_id ?? jwtClaim(userJwt, "org");
+            if ((kind && kind !== "user") || !me.id || !me.email || !org_id) {
                 throw Object.assign(new Error("link requires a signed-in 1Claw user"), { status: 401 });
             }
-            return { id: me.id, email: me.email, org_id: me.org_id };
+            return { id: me.id, email: me.email, org_id };
         },
         async upsertUser(email, returnTo) {
             // 409 is the normal "link required" answer for an existing 1Claw
