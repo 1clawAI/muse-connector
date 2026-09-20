@@ -32,7 +32,7 @@ changing agents or policies. Those stay in the 1Claw dashboard.
 
 ## How a user connects (once)
 
-1. Signed in to 1Claw, open **1claw.co/connect/muse**. The page calls `POST /v1/link` on this
+1. Signed in to 1Claw, go to **Settings → Connected Apps → Connect Muse** (1claw.co/connect/muse). The page calls `POST /v1/link` on this
    service with the user's session; the service asks the vault who they are and creates (or finds)
    their connection on the 1Claw-owned **Muse** platform app. An existing 1Claw user goes through
    the standard "Sign in with 1Claw" link consent once.
