@@ -49,8 +49,8 @@ describe("rate limits", () => {
         for (let i = 0; i < 3; i++) expect((await app.request("/v1/me", { headers: hdr })).status).toBe(401);
         expect((await app.request("/v1/me", { headers: hdr })).status).toBe(429);
         expect(p.getConnection).not.toHaveBeenCalled();
-        // The last X-Forwarded-For hop is the key: a spoofed first entry does not dodge it.
-        expect((await app.request("/v1/me", { headers: { ...hdr, "x-forwarded-for": "198.51.100.1, 203.0.113.9" } })).status).toBe(429);
+        // Behind the edge the chain is "client, edge": the client entry is the key.
+        expect((await app.request("/v1/me", { headers: { ...hdr, "x-forwarded-for": "203.0.113.9, 198.51.100.1" } })).status).toBe(429);
     });
 
     it("caps /v1/link per address", async () => {
@@ -70,7 +70,7 @@ describe("client address behind the edge", () => {
         expect((await app.request("/v1/me", { headers: withSecret("203.0.113.1") })).status).toBe(429);
         // Same edge hop, different real client: its own bucket.
         expect((await app.request("/v1/me", { headers: withSecret("203.0.113.2") })).status).toBe(401);
-        // Wrong secret: the header is ignored and the last XFF hop is the key.
+        // Wrong secret: the header is ignored and the first XFF entry is the key.
         const spoof = { Authorization: "Bearer mcn_x.y", "x-oneclaw-proxy-secret": "wrong", "x-oneclaw-client-ip": "203.0.113.3", "x-forwarded-for": "198.51.100.7" };
         expect((await app.request("/v1/me", { headers: spoof })).status).toBe(401);
         expect((await app.request("/v1/me", { headers: spoof })).status).toBe(401);

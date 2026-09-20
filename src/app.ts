@@ -37,8 +37,8 @@ export interface AppConfig {
     /**
      * Shared secret the 1Claw edge proxy sends as `x-oneclaw-proxy-secret`
      * next to `x-oneclaw-client-ip`. When it matches, that header is the
-     * client address for rate limiting; otherwise the last X-Forwarded-For
-     * hop is (which behind the edge is the edge itself).
+     * client address for rate limiting; otherwise the first X-Forwarded-For
+     * entry is.
      */
     proxySecret?: string;
 }
@@ -67,9 +67,15 @@ function clientIp(c: Context, proxySecret?: string): string {
             if (ip) return ip;
         }
     }
+    // Behind the 1Claw edge the chain is "client, edge" and Cloud Run trusts
+    // the edge, so the first entry is the client. A caller that reaches the
+    // service directly and forges a first entry only splits its own bucket:
+    // tokens are 256-bit HMACs and never reach the vault unverified, so the
+    // per-address ceiling is a courtesy limit, not the security boundary —
+    // the per-token limit and the vault's per-app limits are.
     const xff = c.req.header("x-forwarded-for") ?? "";
     const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
-    return parts[parts.length - 1] ?? c.req.header("x-real-ip") ?? "unknown";
+    return parts[0] ?? c.req.header("x-real-ip") ?? "unknown";
 }
 
 /** Map a 1Claw error (status on the Error) to a connector response. */
