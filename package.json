@@ -17,7 +17,7 @@
     "e2e:prod": "node scripts/e2e-prod.mjs"
   },
   "dependencies": {
-    "@1claw/sdk": "^0.61.23",
+    "@1claw/sdk": "^0.62.0",
     "@hono/node-server": "^1.13.7",
     "hono": "^4.6.14",
     "zod": "^3.24.0"
